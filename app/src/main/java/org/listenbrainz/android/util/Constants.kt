@@ -12,17 +12,16 @@ object Constants {
     const val FEEDBACK_SUBJECT = "[LBAndroid] Feedback"
     const val SPOTIFY_REDIRECT_URI = "org.listenbrainz.android://callback"
     const val LISTENBRAINZ_API_BASE_URL = "https://api.listenbrainz.org/1/"
+    const val LISTENBRAINZ_BETA_API_BASE_URL = "https://beta-api.listenbrainz.org/1/"
     const val ONBOARDING = "onboarding_lb"
     const val ABOUT_URL = "https://listenbrainz.org/about"
-    
-    object Headers {
-        const val AUTHORIZATION = "Authorization"
-    }
 
     object Strings {
         const val TIMESTAMP = "timestamp"
         const val PREFERENCE_LISTENING_BLACKLIST = "listening_blacklist"
+        const val PREFERENCE_LISTENING_WHITELIST = "listening_whitelist"
         const val PREFERENCE_SUBMIT_LISTENS = "submit_listens"
+        const val PREFERENCE_LISTEN_NEW_PLAYERS = "listen_new_players"
         const val PREFERENCE_LISTENING_APPS = "listening_apps"
         const val PREFERENCE_SYSTEM_THEME = "app_theme"
         const val PREFERENCE_PERMS = "perms_code"
@@ -35,6 +34,19 @@ object Constants {
         const val REFRESH_TOKEN = "refresh_token"
         const val STATUS_LOGGED_IN = 1
         const val STATUS_LOGGED_OUT = 0
+
+        const val CHANNEL_NOTI_SCROBBLING = "noti_scrobbling"
+        const val CHANNEL_NOTI_SCR_ERR = "noti_scrobble_errors"
+        const val CHANNEL_NOTI_NEW_APP = "noti_new_app"
+        const val CHANNEL_NOTI_PENDING = "noti_pending_scrobbles"
+        const val CHANNEL_ID = "listen_scrobble_channel"
+
+        const val CHANNEL_PIXEL_NP =
+            "com.google.intelligence.sense.ambientmusic.MusicNotificationChannel"
+        const val PACKAGE_PIXEL_NP = "com.google.intelligence.sense"
+        const val PACKAGE_PIXEL_NP_R = "com.google.android.as"
+        const val PACKAGE_PIXEL_NP_AMM = "com.kieronquinn.app.pixelambientmusic"
+        const val PACKAGE_SHAZAM = "com.shazam.android"
     }
     
 }
@@ -47,8 +59,8 @@ enum class LinkedService(val code: String, val packageName: String? = null) {
     UNKNOWN("");
     
     companion object {
-        fun parseService(code: String) : LinkedService {
-            return when (code[0]) {
+        fun String.toLinkedService(): LinkedService {
+            return when (this[0]) {
                 's' -> SPOTIFY
                 'c' -> CRITIQUEBRAINZ
                 'm' -> MUSICBRAINZ

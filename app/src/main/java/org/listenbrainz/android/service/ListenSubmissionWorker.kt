@@ -4,6 +4,9 @@ import android.content.Context
 import android.media.MediaMetadata
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
+import androidx.work.Data
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -14,6 +17,8 @@ import org.listenbrainz.android.model.AdditionalInfo
 import org.listenbrainz.android.model.ListenSubmitBody
 import org.listenbrainz.android.model.ListenTrackMetadata
 import org.listenbrainz.android.model.ListenType
+import org.listenbrainz.android.model.PlayingTrack
+import org.listenbrainz.android.model.ResponseError
 import org.listenbrainz.android.model.dao.PendingListensDao
 import org.listenbrainz.android.repository.listens.ListensRepository
 import org.listenbrainz.android.repository.preferences.AppPreferences
@@ -32,12 +37,13 @@ class ListenSubmissionWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, workerParams) {
     
     override suspend fun doWork(): Result {
-        val token = appPreferences.getLbAccessToken()
+        val token = appPreferences.lbAccessToken.get()
         if (token.isEmpty()) {
             d("ListenBrainz User token has not been set!")
             return Result.failure()
         }
-        if(inputData.getInt(MediaMetadata.METADATA_KEY_DURATION, 0) <= 30000) {
+        val duration = inputData.getInt(MediaMetadata.METADATA_KEY_DURATION, 0)
+        if(duration in 1..30_000) {
             d("Track is too short to submit")
             return Result.failure()
         }
@@ -46,7 +52,7 @@ class ListenSubmissionWorker @AssistedInject constructor(
             track = inputData.getString(MediaMetadata.METADATA_KEY_TITLE),
             release = inputData.getString(MediaMetadata.METADATA_KEY_ALBUM),
             additionalInfo = AdditionalInfo(
-                durationMs = inputData.getInt(MediaMetadata.METADATA_KEY_DURATION, 0),
+                durationMs = if (duration == 0) null else duration,
                 mediaPlayer = inputData.getString(MediaMetadata.METADATA_KEY_WRITER)
                     ?.let { repository.getPackageLabel(it) },
                 submissionClient = "ListenBrainz Android",
@@ -56,7 +62,10 @@ class ListenSubmissionWorker @AssistedInject constructor(
         
         // Our listen to submit
         val listen = ListenSubmitBody.Payload(
-            timestamp = if(inputData.getString("TYPE") == ListenType.SINGLE.code) inputData.getLong(Constants.Strings.TIMESTAMP, 0) else null,
+            timestamp = when (ListenType.SINGLE.code) {
+                inputData.getString("TYPE") -> inputData.getLong(Constants.Strings.TIMESTAMP, 0)
+                else -> null
+            },
             metadata = metadata
         )
     
@@ -69,45 +78,90 @@ class ListenSubmissionWorker @AssistedInject constructor(
             repository.submitListen(token, body)
         }
         
-        return if (response.status == Resource.Status.SUCCESS){
-            d("Listen submitted.")
-            
-            // Means conditions are met. Work manager automatically manages internet state.
-            val pendingListens = pendingListensDao.getPendingListens()
-            
-            if (pendingListens.isNotEmpty()) {
-                
-                val submission = withContext(Dispatchers.IO){
-                    repository.submitListen(
-                        token,
-                        ListenSubmitBody().apply {
-                            listenType = "import"
-                            addListens(listensList = pendingListens)
-                        }
-                        
-                    )
-                }
-    
-                if (submission.status == Resource.Status.SUCCESS){
-                    // Empty all pending listens.
-                    d("Pending listens submitted.")
-                    pendingListensDao.deleteAllPendingListens()
+        return when (response.status) {
+            Resource.Status.SUCCESS -> {
+                if (body.listenType == ListenType.PLAYING_NOW.code) {
+                    d("Playing Now submitted")
                 } else {
-                    w("Could not submit pending listens.")
+                    d("Listen submitted")
                 }
+
+                // Means conditions are met. Work manager automatically manages internet state.
+                val pendingListens = pendingListensDao.getPendingListens()
+
+                if (pendingListens.isNotEmpty()) {
+
+                    val submission = withContext(Dispatchers.IO){
+                        repository.submitListen(
+                            token,
+                            ListenSubmitBody().apply {
+                                listenType = "import"
+                                addListens(listensList = pendingListens)
+                            }
+
+                        )
+                    }
+
+                    when (submission.status) {
+                        Resource.Status.SUCCESS -> {
+                            // Empty all pending listens.
+                            d("Pending listens submitted.")
+                            pendingListensDao.deleteAllPendingListens()
+                        }
+                        else -> {
+                            w("Could not submit pending listens.")
+                        }
+                    }
+                }
+
+                Result.success()
+
             }
-            
-            Result.success()
-            
-        } else {
-            // In case of failure, we add this listen to pending list.
-            if (inputData.getString("TYPE") == "single"){
-                // We don't want to submit playing nows later.
-                d("Submission failed, listen saved.")
-                pendingListensDao.addListen(listen)
+            else -> {
+                // In case of failure, we add this listen to pending list.
+                if (inputData.getString("TYPE") == "single"){
+                    if (response.error?.ordinal == ResponseError.BAD_REQUEST.ordinal) {
+                        d("Submission failed, not saving listen because metadata is faulty.")
+                    } else {
+                        // We don't want to submit playing nows later.
+                        d("Submission failed, listen saved.")
+                        pendingListensDao.addListen(listen)
+                    }
+                }
+
+                Result.failure()
             }
-            
-            Result.failure()
+        }
+    }
+    
+    companion object {
+    
+        /** Build a one time work request to submit a listen.
+         * @param listenType Type of listen to submit.
+         */
+        fun buildWorkRequest(playingTrack: PlayingTrack, listenType: ListenType): OneTimeWorkRequest {
+        
+            val data = Data.Builder()
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, playingTrack.artist)
+                .putString(MediaMetadata.METADATA_KEY_TITLE, playingTrack.title)
+                .putInt(MediaMetadata.METADATA_KEY_DURATION, playingTrack.duration.toInt())
+                .putString(MediaMetadata.METADATA_KEY_WRITER, playingTrack.pkgName)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, playingTrack.releaseName)
+                .putString("TYPE", listenType.code)
+                .putLong(Constants.Strings.TIMESTAMP, playingTrack.timestampSeconds)
+                .build()
+        
+            /** We are not going to set network constraints as we want to minimize API calls
+             * by bulk submitting listens.*/
+            /*val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()*/
+        
+            return OneTimeWorkRequestBuilder<ListenSubmissionWorker>()
+                .setInputData(data)
+                //.setConstraints(constraints)
+                .build()
+        
         }
     }
 }

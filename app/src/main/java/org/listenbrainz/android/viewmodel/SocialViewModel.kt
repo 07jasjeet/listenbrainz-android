@@ -16,6 +16,7 @@ import org.listenbrainz.android.model.RecommendationData
 import org.listenbrainz.android.model.RecommendationMetadata
 import org.listenbrainz.android.model.Review
 import org.listenbrainz.android.model.ReviewMetadata
+import org.listenbrainz.android.model.SocialData
 import org.listenbrainz.android.model.SocialUiState
 import org.listenbrainz.android.model.TrackMetadata
 import org.listenbrainz.android.model.feed.ReviewEntityType
@@ -32,6 +33,9 @@ class SocialViewModel @Inject constructor(
     private val remotePlaybackHandler: RemotePlaybackHandler,
     @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
 ): FollowUnfollowModel<SocialUiState>(repository, ioDispatcher) {
+
+
+
     
     override val uiState: StateFlow<SocialUiState> = createUiStateFlow()
     override fun createUiStateFlow(): StateFlow<SocialUiState> =
@@ -84,7 +88,7 @@ class SocialViewModel @Inject constructor(
         
         viewModelScope.launch(ioDispatcher) {
             val result = repository.postRecommendationToAll(
-                username = appPreferences.getUsername(),
+                username = appPreferences.username.get(),
                 data = RecommendationData(
                     metadata = RecommendationMetadata(
                         trackName = metadata.trackMetadata?.trackName ?: return@launch,
@@ -106,7 +110,7 @@ class SocialViewModel @Inject constructor(
         
         viewModelScope.launch(ioDispatcher) {
             val result = repository.postPersonalRecommendation(
-                username = appPreferences.getUsername(),
+                username = appPreferences.username.get(),
                 data = RecommendationData(
                     metadata = RecommendationMetadata(
                         trackName = metadata.trackMetadata?.trackName ?: return@launch,
@@ -131,7 +135,7 @@ class SocialViewModel @Inject constructor(
         
         viewModelScope.launch(ioDispatcher) {
             val result = repository.postReview(
-                username = appPreferences.getUsername(),
+                username = appPreferences.username.get(),
                 data = Review(
                     metadata = ReviewMetadata(
                         entityName = metadata.trackMetadata?.trackName ?: return@launch,
@@ -164,4 +168,14 @@ class SocialViewModel @Inject constructor(
             }
         }
     }
+
+    suspend fun getFollowers(): Resource<SocialData> {
+        val username = appPreferences.username.get()
+        return repository.getFollowers(username).also {
+            if(it.status == Resource.Status.FAILED){
+                emitError(it.error)
+            }
+        }
+    }
+
 }
